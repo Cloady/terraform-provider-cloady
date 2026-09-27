@@ -18,10 +18,11 @@ func (d *workspaceDataSource) Metadata(_ context.Context, req datasource.Metadat
 }
 func (d *workspaceDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{Description: "Look up an existing workspace without managing its lifecycle.", Attributes: map[string]schema.Attribute{
-		"slug": schema.StringAttribute{Required: true, Description: "Workspace slug."},
-		"id":   schema.StringAttribute{Computed: true, Description: "Workspace slug."},
-		"name": schema.StringAttribute{Computed: true, Description: "Display name."},
-		"hues": schema.ListAttribute{Computed: true, ElementType: types.Int64Type, Description: "Workspace brand hue angles."},
+		"slug":            schema.StringAttribute{Required: true, Description: "Workspace slug."},
+		"id":              schema.StringAttribute{Computed: true, Description: "Workspace slug."},
+		"name":            schema.StringAttribute{Computed: true, Description: "Display name."},
+		"hues":            schema.ListAttribute{Computed: true, ElementType: types.Int64Type, Description: "Workspace brand hue angles."},
+		"managed_backups": schema.BoolAttribute{Computed: true, Description: "Whether the managed backups add-on is on."},
 	}}
 }
 func (d *workspaceDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {

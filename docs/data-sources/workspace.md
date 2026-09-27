@@ -29,4 +29,5 @@ data "cloady_workspace" "acme" {
 
 - `hues` (List of Number) Workspace brand hue angles.
 - `id` (String) Workspace slug.
+- `managed_backups` (Boolean) Whether the managed backups add-on is on.
 - `name` (String) Display name.

@@ -71,6 +71,7 @@ data "cloady_regions" "test" {}
 		{Config: config("Demo"), Check: resource.ComposeAggregateTestCheckFunc(resource.TestCheckResourceAttr("cloady_workspace.test", "id", "demo"), resource.TestCheckResourceAttr("cloady_workspace.test", "hues.0", "6"), resource.TestCheckResourceAttr("cloady_workspace.test", "hues.1", "211"), resource.TestCheckResourceAttr("data.cloady_workspace.test", "name", "Demo"), resource.TestCheckResourceAttr("data.cloady_regions.test", "regions.0.id", "eu1"))},
 		{ResourceName: "cloady_workspace.test", ImportState: true, ImportStateVerify: true},
 		{Config: config("Renamed"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "name", "Renamed")},
+		{Config: strings.Replace(config("Renamed"), "  name = \"Renamed\"\n", "  name = \"Renamed\"\n  managed_backups = true\n", 1), Check: resource.ComposeAggregateTestCheckFunc(resource.TestCheckResourceAttr("cloady_workspace.test", "managed_backups", "true"), resource.TestCheckResourceAttr("data.cloady_workspace.test", "managed_backups", "true"))},
 		{PreConfig: func() { mock.mu.Lock(); mock.workspace["name"] = "Drift"; mock.mu.Unlock() }, Config: config("Renamed"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "name", "Renamed")},
 		{PreConfig: func() { mock.mu.Lock(); mock.workspace = nil; mock.mu.Unlock() }, Config: config("Renamed"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "id", "demo")},
 	}})
@@ -187,7 +188,7 @@ func newMockAPI(t *testing.T) *mockAPI {
 			if _, sent := body["tier"]; sent {
 				t.Error("workspace create must not send a billing tier")
 			}
-			m.workspace = map[string]any{"slug": body["slug"], "name": body["name"], "hues": body["hues"], "services": []any{}}
+			m.workspace = map[string]any{"slug": body["slug"], "name": body["name"], "hues": body["hues"], "managedBackups": false, "services": []any{}}
 			w.WriteHeader(201)
 			write(map[string]any{"workspace": m.workspace})
 		case "/api/workspaces/demo":
