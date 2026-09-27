@@ -30,4 +30,3 @@ data "cloady_workspace" "acme" {
 - `hues` (List of Number) Workspace brand hue angles.
 - `id` (String) Workspace slug.
 - `name` (String) Display name.
-- `tier` (String) Active billing tier ID, or null while billing is pending.

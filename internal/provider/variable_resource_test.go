@@ -108,12 +108,13 @@ func TestVariableSecretLifecycle(t *testing.T) {
 
 func TestVariableImportRevealsSecret(t *testing.T) {
 	ctx := context.Background()
+	const remoteID = "opaque:id?version=2"
 	r := &variableResource{client: childTestClient(t, func(w http.ResponseWriter, req *http.Request) {
 		assertChildScope(t, req)
 		if strings.HasSuffix(req.URL.Path, "/reveal") {
 			_ = json.NewEncoder(w).Encode(map[string]string{"value": "imported-secret"})
 		} else {
-			_ = json.NewEncoder(w).Encode(map[string]any{"vars": []variableRow{{ID: testChildUUID, Key: "API_KEY", Value: "•••••", IsSecret: true}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"vars": []variableRow{{ID: remoteID, Key: "API_KEY", Value: "•••••", IsSecret: true}}})
 		}
 	})}
 	var schemaResp resource.SchemaResponse
@@ -122,7 +123,7 @@ func TestVariableImportRevealsSecret(t *testing.T) {
 	// value SetAttribute cannot build one and every write fails.
 	imported := resource.ImportStateResponse{State: tfsdk.State{Schema: schemaResp.Schema,
 		Raw: tftypes.NewValue(schemaResp.Schema.Type().TerraformType(ctx), nil)}}
-	r.ImportState(ctx, resource.ImportStateRequest{ID: "team/api/production/us-east/" + testChildUUID}, &imported)
+	r.ImportState(ctx, resource.ImportStateRequest{ID: "team/api/production/us-east/" + remoteID}, &imported)
 	if imported.Diagnostics.HasError() {
 		t.Fatal(imported.Diagnostics)
 	}
@@ -135,7 +136,7 @@ func TestVariableImportRevealsSecret(t *testing.T) {
 	if diags := read.State.Get(ctx, &model); diags.HasError() {
 		t.Fatal(diags)
 	}
-	if model.Value.ValueString() != "imported-secret" || !model.IsSecret.ValueBool() {
+	if model.VariableID.ValueString() != remoteID || model.Value.ValueString() != "imported-secret" || !model.IsSecret.ValueBool() {
 		t.Fatal("import did not populate plaintext secret from API")
 	}
 }
@@ -164,10 +165,12 @@ func TestVariableRevealFailurePreservesState(t *testing.T) {
 
 func TestParseChildID(t *testing.T) {
 	valid := "team/api/production/us-east/" + testChildUUID
-	if parts, err := parseChildID(valid); err != nil || len(parts) != 5 {
-		t.Fatalf("valid import rejected: %v", err)
+	for _, id := range []string{valid, "team/api/preview/us-east/opaque:id?version=2"} {
+		if parts, err := parseChildID(id); err != nil || len(parts) != 5 {
+			t.Fatalf("valid import %q rejected: %v", id, err)
+		}
 	}
-	for _, id := range []string{"", testChildUUID, "team/api/us-east/" + testChildUUID, "team/api/staging/us-east/" + testChildUUID, "team/api/production//" + testChildUUID, "team/api/production/us-east/not-a-uuid", "team/api/production/ us-east/" + testChildUUID, valid + "/extra"} {
+	for _, id := range []string{"", testChildUUID, "team/api/us-east/" + testChildUUID, "team/api/staging/us-east/" + testChildUUID, "team/api/production//" + testChildUUID, "team/api/production/us-east/", "team/api/production/ us-east/" + testChildUUID, "team/api/production/us-east/has space", valid + "/extra"} {
 		t.Run(id, func(t *testing.T) {
 			if _, err := parseChildID(id); err == nil {
 				t.Fatal("invalid import accepted")

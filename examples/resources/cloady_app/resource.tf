@@ -8,6 +8,10 @@ resource "cloady_app" "api" {
     repository_url = "https://github.com/acme/api"
     branch         = "main"
   }
+
+  # Available before the first build; updates trigger one deployment after all
+  # managed values are saved. Do not also manage these keys with cloady_variable.
+  values = { LOG_LEVEL = "info" }
 }
 
 # Or install a catalog application.
@@ -17,6 +21,6 @@ resource "cloady_app" "db" {
   region    = "eu1"
   catalog   = "postgres"
 
-  # Volumes only ever grow. Lowering a size is rejected during planning.
+  # Existing volumes cannot shrink. Replacement apps create fresh storage.
   volume_sizes = { data = 20 }
 }

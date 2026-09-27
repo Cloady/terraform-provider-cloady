@@ -25,7 +25,6 @@ var (
 	_                   resource.ResourceWithConfigure   = &variableResource{}
 	_                   resource.ResourceWithImportState = &variableResource{}
 	childSegmentPattern                                  = regexp.MustCompile(`^[^\s/]+$`)
-	childUUIDPattern                                     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
 type variableResource struct{ client *client.Client }
@@ -60,7 +59,7 @@ func (r *variableResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 		MarkdownDescription: "Manages one app environment variable. Values are marked sensitive but are stored in Terraform state. Changes take effect on the next app deployment.",
 		Attributes: map[string]schema.Attribute{
 			"id":          schema.StringAttribute{Computed: true, MarkdownDescription: "Import identity: workspace/app/environment/region/variable_id.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"variable_id": schema.StringAttribute{Computed: true, MarkdownDescription: "Variable UUID returned by the API.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"variable_id": schema.StringAttribute{Computed: true, MarkdownDescription: "Variable ID returned by the API.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"workspace":   childScopeAttribute("Workspace slug."),
 			"app":         childScopeAttribute("App slug."),
 			"environment": schema.StringAttribute{
@@ -72,12 +71,10 @@ func (r *variableResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 			"region": childScopeAttribute("Region ID of the app instance."),
 			"key": schema.StringAttribute{
 				Required: true, MarkdownDescription: "Environment variable name, in SCREAMING_SNAKE_CASE (at most 80 characters).",
-				Validators:    []validator.String{stringvalidator.LengthAtMost(80), stringvalidator.RegexMatches(regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`), "must be SCREAMING_SNAKE_CASE")},
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"value": schema.StringAttribute{
 				Required: true, Sensitive: true, MarkdownDescription: "Variable value, at most 4096 characters. Stored in Terraform state even when is_secret is true.",
-				Validators: []validator.String{stringvalidator.LengthAtMost(4096)},
 			},
 			"is_secret": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), MarkdownDescription: "Encrypt the value at rest in Cloady. Defaults to false. Terraform state still contains the plaintext value."},
 		},
@@ -221,7 +218,7 @@ func childScopeAttribute(description string) schema.StringAttribute {
 func parseChildID(id string) ([]string, error) {
 	parts := strings.Split(id, "/")
 	if len(parts) != 5 {
-		return nil, fmt.Errorf("expected workspace/app/environment/region/UUID")
+		return nil, fmt.Errorf("expected workspace/app/environment/region/resource_id")
 	}
 	for _, part := range parts {
 		if !childSegmentPattern.MatchString(part) {
@@ -230,9 +227,6 @@ func parseChildID(id string) ([]string, error) {
 	}
 	if parts[2] != "production" && parts[2] != "preview" && parts[2] != "development" {
 		return nil, fmt.Errorf("environment must be production, preview, or development")
-	}
-	if !childUUIDPattern.MatchString(parts[4]) {
-		return nil, fmt.Errorf("the final identity component must be the resource UUID")
 	}
 	return parts, nil
 }

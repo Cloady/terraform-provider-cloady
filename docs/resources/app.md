@@ -23,6 +23,10 @@ resource "cloady_app" "api" {
     repository_url = "https://github.com/acme/api"
     branch         = "main"
   }
+
+  # Available before the first build; updates trigger one deployment after all
+  # managed values are saved. Do not also manage these keys with cloady_variable.
+  values = { LOG_LEVEL = "info" }
 }
 
 # Or install a catalog application.
@@ -32,7 +36,7 @@ resource "cloady_app" "db" {
   region    = "eu1"
   catalog   = "postgres"
 
-  # Volumes only ever grow. Lowering a size is rejected during planning.
+  # Existing volumes cannot shrink. Replacement apps create fresh storage.
   volume_sizes = { data = 20 }
 }
 ```
@@ -54,10 +58,12 @@ resource "cloady_app" "db" {
 - `git` (Attributes) Git source. Set exactly one of git or catalog. (see [below for nested schema](#nestedatt--git))
 - `memory_scale` (Number) Memory multiplier, from 0.5 through 4 in increments of 0.25. This is not a GiB amount.
 - `slug` (String) Application slug. Generated from name when omitted. Changing a configured slug replaces the application.
-- `volume_sizes` (Map of Number) Explicit volume size overrides in GiB, keyed by template volume name (1–4096 GiB). Existing volumes cannot shrink. Unspecified volumes retain their server-managed size.
+- `values` (Map of String, Sensitive) Environment values supplied before the first deployment. Changes synchronize these keys and start one deployment; other variables are preserved. Do not manage the same keys with cloady_variable. Plaintext values are stored in Terraform state.
+- `volume_sizes` (Map of Number) Explicit volume size overrides in GiB, keyed by template volume name (1–4096 GiB). In-place updates cannot shrink existing volumes. Unspecified volumes retain their server-managed size.
 
 ### Read-Only
 
+- `effective_volume_sizes` (Map of Number) Effective volume capacities in GiB, including template defaults and server-managed volumes.
 - `endpoints` (List of String) Public endpoint URLs returned by Cloady.
 - `id` (String) Import identifier: workspace/app/environment/region.
 - `status` (String) Observed deployment state; successful apply does not imply readiness.

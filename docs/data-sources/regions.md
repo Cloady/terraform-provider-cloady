@@ -32,7 +32,6 @@ output "region_ids" {
 
 Read-Only:
 
-- `city` (String) City.
 - `code` (String) Region code.
 - `country` (String) Country.
 - `free_eligible` (Boolean) Whether the region supports the free tier.

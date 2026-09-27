@@ -22,8 +22,8 @@ terraform {
 }
 
 # The token defaults to CLOADY_TOKEN. Mint one in the dashboard under
-# Account -> Tokens. Creating workspaces or changing billing needs full scope;
-# everything else works with a read token.
+# Account -> Tokens. Workspace administration needs full scope; app, variable,
+# and domain writes need deploy or full scope. Read scope supports other lookups.
 provider "cloady" {}
 ```
 
@@ -33,5 +33,5 @@ provider "cloady" {}
 ### Optional
 
 - `base_url` (String) Control-plane URL. Defaults to CLOADY_CONTROL_PLANE_URL, then https://cloady.com. Supply the origin without /api.
-- `request_timeout` (Number) Per-request timeout in seconds. Defaults to 180.
+- `request_timeout` (Number) Positive per-request timeout in seconds. Defaults to 180.
 - `token` (String, Sensitive) Personal API token. Defaults to CLOADY_TOKEN. Workspace creation requires full scope.

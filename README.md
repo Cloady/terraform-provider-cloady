@@ -20,6 +20,7 @@ resource "cloady_app" "api" {
   name      = "API"
   region    = "eu1"
   git       = { repository_url = "https://github.com/acme/api" }
+  values    = { LOG_LEVEL = "info" }
 }
 
 output "url" {
@@ -32,7 +33,7 @@ output "url" {
 | Resource | Manages |
 |---|---|
 | `cloady_app` | An application deployed from a Git repository or the catalog |
-| `cloady_workspace` | A workspace and its billing tier |
+| `cloady_workspace` | A workspace |
 | `cloady_variable` | One application environment variable |
 | `cloady_domain` | A custom domain on an application |
 
@@ -48,9 +49,15 @@ Mint a personal API token in the dashboard under **Account → Tokens** and expo
 export CLOADY_TOKEN=cldy_...
 ```
 
-Creating workspaces and changing billing require a full-scope token; everything else
-works with a read token. Set `base_url` (or `CLOADY_CONTROL_PLANE_URL`) to target a
-control plane other than `https://cloady.com`.
+Workspace administration requires a full-scope token. App, variable, and domain
+writes require deploy or full scope; a read token supports lookups other than
+variables. Set `base_url` (or `CLOADY_CONTROL_PLANE_URL`) to target another control plane.
+
+Use the app's `values` map for deployment variables: they are supplied before the
+first build, and changes are saved together before one deployment. Removing a key
+removes that managed variable; unrelated variables remain untouched. Do not manage
+the same key with both `values` and `cloady_variable`. Standalone variable resources
+change stored settings and take effect at the next deployment.
 
 ## Things worth knowing before you apply
 
@@ -58,8 +65,9 @@ control plane other than `https://cloady.com`.
   namespace, and its volumes go with it. Put `prevent_destroy` on anything stateful.
 - **Region, environment, workspace and Git repository are immutable.** Changing one
   replaces the application, which is a delete followed by a create.
-- **Volumes only grow.** `volume_sizes` is rejected during planning if it would shrink
-  an existing volume, because no storage class can shrink a bound claim.
+- **Existing volumes only grow.** In-place changes are checked against
+  `effective_volume_sizes`, including template defaults. A replacement app may use
+  smaller volumes because it creates new storage.
 - **Variable values live in Terraform state in plaintext**, including secrets. The
   `is_secret` flag encrypts the value inside Cloady, not inside your state file. Use a
   remote backend with encryption at rest.

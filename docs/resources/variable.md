@@ -13,6 +13,8 @@ Manages one app environment variable. Values are marked sensitive but are stored
 ## Example Usage
 
 ```terraform
+# Stored setting; takes effect at the next deployment. Use cloady_app.values
+# instead when Terraform should deploy the change as part of the same apply.
 resource "cloady_variable" "database_url" {
   workspace = cloady_workspace.acme.slug
   app       = cloady_app.api.slug
@@ -42,7 +44,7 @@ resource "cloady_variable" "database_url" {
 ### Read-Only
 
 - `id` (String) Import identity: workspace/app/environment/region/variable_id.
-- `variable_id` (String) Variable UUID returned by the API.
+- `variable_id` (String) Variable ID returned by the API.
 
 ## Import
 

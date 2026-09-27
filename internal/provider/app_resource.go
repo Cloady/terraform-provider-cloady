@@ -3,13 +3,11 @@ package provider
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/Cloady/terraform-provider-cloady/internal/client"
-	"github.com/hashicorp/terraform-plugin-framework-validators/float64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -44,19 +42,21 @@ var (
 type appResource struct{ client *client.Client }
 
 type appResourceModel struct {
-	ID          types.String  `tfsdk:"id"`
-	Workspace   types.String  `tfsdk:"workspace"`
-	Name        types.String  `tfsdk:"name"`
-	Slug        types.String  `tfsdk:"slug"`
-	Environment types.String  `tfsdk:"environment"`
-	Region      types.String  `tfsdk:"region"`
-	Git         types.Object  `tfsdk:"git"`
-	Catalog     types.String  `tfsdk:"catalog"`
-	CPUScale    types.Float64 `tfsdk:"cpu_scale"`
-	MemoryScale types.Float64 `tfsdk:"memory_scale"`
-	VolumeSizes types.Map     `tfsdk:"volume_sizes"`
-	Status      types.String  `tfsdk:"status"`
-	Endpoints   types.List    `tfsdk:"endpoints"`
+	ID                   types.String  `tfsdk:"id"`
+	Workspace            types.String  `tfsdk:"workspace"`
+	Name                 types.String  `tfsdk:"name"`
+	Slug                 types.String  `tfsdk:"slug"`
+	Environment          types.String  `tfsdk:"environment"`
+	Region               types.String  `tfsdk:"region"`
+	Git                  types.Object  `tfsdk:"git"`
+	Catalog              types.String  `tfsdk:"catalog"`
+	CPUScale             types.Float64 `tfsdk:"cpu_scale"`
+	MemoryScale          types.Float64 `tfsdk:"memory_scale"`
+	VolumeSizes          types.Map     `tfsdk:"volume_sizes"`
+	EffectiveVolumeSizes types.Map     `tfsdk:"effective_volume_sizes"`
+	Values               types.Map     `tfsdk:"values"`
+	Status               types.String  `tfsdk:"status"`
+	Endpoints            types.List    `tfsdk:"endpoints"`
 }
 
 type appGitModel struct {
@@ -112,22 +112,24 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 		Attributes: map[string]schema.Attribute{
 			"id":          schema.StringAttribute{Computed: true, Description: "Import identifier: workspace/app/environment/region."},
 			"workspace":   schema.StringAttribute{Required: true, Description: "Workspace slug.", PlanModifiers: replace, Validators: []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`), "must be a workspace slug")}},
-			"name":        schema.StringAttribute{Required: true, Description: "Application display name. Changing it preserves the application slug.", Validators: []validator.String{stringvalidator.LengthBetween(1, 80)}},
+			"name":        schema.StringAttribute{Required: true, Description: "Application display name. Changing it preserves the application slug."},
 			"slug":        schema.StringAttribute{Optional: true, Computed: true, Description: "Application slug. Generated from name when omitted. Changing a configured slug replaces the application.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()}, Validators: []validator.String{stringvalidator.RegexMatches(regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,23}$`), "must be a lowercase slug of at most 24 characters")}},
 			"environment": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("production"), Description: "Application environment: production, preview, or development.", PlanModifiers: replace, Validators: []validator.String{stringvalidator.OneOf("production", "preview", "development")}},
-			"region":      schema.StringAttribute{Required: true, Description: "Deployment region ID.", PlanModifiers: replace, Validators: []validator.String{stringvalidator.LengthAtLeast(1)}},
-			"catalog":     schema.StringAttribute{Optional: true, Description: "Catalog application name, such as postgres. Set exactly one of catalog or git.", PlanModifiers: replace, Validators: []validator.String{stringvalidator.LengthBetween(1, 80)}},
+			"region":      schema.StringAttribute{Required: true, Description: "Deployment region ID.", PlanModifiers: replace},
+			"catalog":     schema.StringAttribute{Optional: true, Description: "Catalog application name, such as postgres. Set exactly one of catalog or git.", PlanModifiers: replace},
 			"git": schema.SingleNestedAttribute{Optional: true, Description: "Git source. Set exactly one of git or catalog.", Attributes: map[string]schema.Attribute{
-				"repository_url": schema.StringAttribute{Required: true, Description: "Repository URL, including its scheme, or git@ SSH address.", PlanModifiers: replace, Validators: []validator.String{stringvalidator.LengthBetween(1, 500)}},
-				"branch":         schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("main"), Description: "Git branch to deploy. Defaults to main, matching Cloady deployment behavior.", Validators: []validator.String{stringvalidator.LengthBetween(1, 255)}},
-				"subdirectory":   schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""), Description: "Repository subdirectory without leading or trailing slashes.", PlanModifiers: replace, Validators: []validator.String{stringvalidator.LengthAtMost(255)}},
+				"repository_url": schema.StringAttribute{Required: true, Description: "Repository URL, including its scheme, or git@ SSH address.", PlanModifiers: replace},
+				"branch":         schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("main"), Description: "Git branch to deploy. Defaults to main, matching Cloady deployment behavior.", Validators: []validator.String{stringvalidator.LengthAtLeast(1)}},
+				"subdirectory":   schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""), Description: "Repository subdirectory without leading or trailing slashes.", PlanModifiers: replace},
 				"auto_deploy":    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), Description: "Automatically deploy Git updates. Defaults to true; set false for manual deployments."},
 			}},
-			"cpu_scale":    schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(1), Description: "CPU multiplier, from 0.5 through 4 in increments of 0.25. This is not a core count.", Validators: []validator.Float64{float64validator.Between(0.5, 4)}},
-			"memory_scale": schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(1), Description: "Memory multiplier, from 0.5 through 4 in increments of 0.25. This is not a GiB amount.", Validators: []validator.Float64{float64validator.Between(0.5, 4)}},
-			"volume_sizes": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.Int64Type, Default: mapdefault.StaticValue(types.MapValueMust(types.Int64Type, map[string]attr.Value{})), Description: "Explicit volume size overrides in GiB, keyed by template volume name (1–4096 GiB). Existing volumes cannot shrink. Unspecified volumes retain their server-managed size."},
-			"status":       schema.StringAttribute{Computed: true, Description: "Observed deployment state; successful apply does not imply readiness."},
-			"endpoints":    schema.ListAttribute{Computed: true, ElementType: types.StringType, Description: "Public endpoint URLs returned by Cloady."},
+			"cpu_scale":              schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(1), Description: "CPU multiplier, from 0.5 through 4 in increments of 0.25. This is not a core count."},
+			"memory_scale":           schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(1), Description: "Memory multiplier, from 0.5 through 4 in increments of 0.25. This is not a GiB amount."},
+			"volume_sizes":           schema.MapAttribute{Optional: true, Computed: true, ElementType: types.Int64Type, Default: mapdefault.StaticValue(types.MapValueMust(types.Int64Type, map[string]attr.Value{})), Description: "Explicit volume size overrides in GiB, keyed by template volume name (1–4096 GiB). In-place updates cannot shrink existing volumes. Unspecified volumes retain their server-managed size."},
+			"effective_volume_sizes": schema.MapAttribute{Computed: true, ElementType: types.Int64Type, Description: "Effective volume capacities in GiB, including template defaults and server-managed volumes."},
+			"values":                 schema.MapAttribute{Optional: true, Computed: true, Sensitive: true, ElementType: types.StringType, Default: mapdefault.StaticValue(types.MapValueMust(types.StringType, map[string]attr.Value{})), Description: "Environment values supplied before the first deployment. Changes synchronize these keys and start one deployment; other variables are preserved. Do not manage the same keys with cloady_variable. Plaintext values are stored in Terraform state."},
+			"status":                 schema.StringAttribute{Computed: true, Description: "Observed deployment state; successful apply does not imply readiness."},
+			"endpoints":              schema.ListAttribute{Computed: true, ElementType: types.StringType, Description: "Public endpoint URLs returned by Cloady."},
 		},
 	}
 }
@@ -158,17 +160,9 @@ func (r *appResource) ValidateConfig(ctx context.Context, req resource.ValidateC
 			resp.Diagnostics.AddAttributeError(path.Root(name), "Invalid whitespace", "Remove surrounding whitespace.")
 		}
 	}
-	for name, value := range map[string]types.Float64{"cpu_scale": data.CPUScale, "memory_scale": data.MemoryScale} {
-		if !value.IsNull() && !value.IsUnknown() && math.Mod(value.ValueFloat64(), .25) != 0 {
-			resp.Diagnostics.AddAttributeError(path.Root(name), "Invalid scale increment", "Scale must be a multiple of 0.25.")
-		}
-	}
-	for name, value := range data.VolumeSizes.Elements() {
-		if len(name) < 1 || len(name) > 30 {
-			resp.Diagnostics.AddAttributeError(path.Root("volume_sizes"), "Invalid volume name", "Volume names must contain 1–30 characters.")
-		}
-		if size, ok := value.(types.Int64); ok && !size.IsUnknown() && (size.IsNull() || size.ValueInt64() < 1 || size.ValueInt64() > 4096) {
-			resp.Diagnostics.AddAttributeError(path.Root("volume_sizes"), "Invalid volume size", "Volume sizes must be integers from 1 through 4096 GiB.")
+	for key, value := range data.Values.Elements() {
+		if value.IsNull() {
+			resp.Diagnostics.AddAttributeError(path.Root("values").AtMapKey(key), "Invalid application value", "Use a string value; remove the key to delete the variable.")
 		}
 	}
 	if !data.Git.IsNull() && !data.Git.IsUnknown() {
@@ -202,20 +196,15 @@ func (r *appResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReq
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// Switching source type must replace even when a nested attribute disappears.
+	// Switching source type also replaces when a nested attribute disappears.
 	if !plan.Git.IsUnknown() && plan.Git.IsNull() != state.Git.IsNull() {
 		resp.RequiresReplace = append(resp.RequiresReplace, path.Root("git"))
 	}
-	for name, value := range plan.VolumeSizes.Elements() {
-		old, exists := state.VolumeSizes.Elements()[name]
-		if !exists {
-			continue
-		}
-		size, ok := value.(types.Int64)
-		prior, oldOK := old.(types.Int64)
-		if ok && oldOK && !size.IsUnknown() && !prior.IsUnknown() && size.ValueInt64() < prior.ValueInt64() {
-			resp.Diagnostics.AddAttributeError(path.Root("volume_sizes").AtMapKey(name), "Volume cannot shrink", "Cloady preserves existing volume capacity. Choose a size at least as large as the current size.")
-		}
+	pending, diags := req.Private.GetKey(ctx, "deployment_pending")
+	resp.Diagnostics.Append(diags...)
+	if len(pending) > 0 {
+		// A failed deployment still needs an apply even if stored values now match.
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("status"), types.StringUnknown())...)
 	}
 }
 
@@ -233,7 +222,12 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	body := map[string]any{"name": data.Name.ValueString(), "region": data.Region.ValueString(), "env": data.Environment.ValueString(), "source": source, "scale": scale}
+	values := map[string]string{}
+	resp.Diagnostics.Append(data.Values.ElementsAs(ctx, &values, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	body := map[string]any{"values": values, "name": data.Name.ValueString(), "region": data.Region.ValueString(), "env": data.Environment.ValueString(), "source": source, "scale": scale}
 	if autoDeploy != nil {
 		body["autoDeploy"] = *autoDeploy
 	}
@@ -282,6 +276,10 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 	for _, app := range result.Workspace.Services {
 		if app.Slug == data.Slug.ValueString() && app.Env == data.Environment.ValueString() && app.Region == data.Region.ValueString() {
 			resp.Diagnostics.Append(data.refresh(ctx, app)...)
+			resp.Diagnostics.Append(r.readValues(ctx, &data)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 			return
 		}
@@ -293,6 +291,19 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	var data, previous appResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &previous)...)
+	// Only an in-place update has existing volumes; replacement creates may
+	// freely choose smaller sizes, including Terraform's explicit -replace.
+	for name, value := range data.VolumeSizes.Elements() {
+		old, exists := previous.EffectiveVolumeSizes.Elements()[name]
+		if !exists {
+			old = previous.VolumeSizes.Elements()[name]
+		}
+		size, ok := value.(types.Int64)
+		prior, oldOK := old.(types.Int64)
+		if ok && oldOK && !size.IsNull() && !prior.IsNull() && size.ValueInt64() < prior.ValueInt64() {
+			resp.Diagnostics.AddAttributeError(path.Root("volume_sizes").AtMapKey(name), "Volume cannot shrink", "Cloady preserves existing volume capacity. Choose a size at least as large as the current size.")
+		}
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -303,24 +314,67 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// Sending the slug pins it, so renaming never re-derives the address Terraform
-	// tracks. The API ignores a branch that already matches the stored one.
+	oldSource, oldAutoDeploy, diags := previous.source(ctx)
+	resp.Diagnostics.Append(diags...)
+	pending, diags := req.Private.GetKey(ctx, "deployment_pending")
+	resp.Diagnostics.Append(diags...)
+	valuesChanged := !data.Values.Equal(previous.Values)
+	branchChanged := source.Type == "git" && source.Branch != oldSource.Branch
+	deploy := valuesChanged || branchChanged || len(pending) > 0
+	if deploy {
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "deployment_pending", []byte("true"))...)
+		// Keep ownership of every touched key if a later request fails. Read
+		// refreshes their values; the private marker keeps deployment retryable.
+		owned := previous.Values.Elements()
+		for key, value := range data.Values.Elements() {
+			owned[key] = value
+		}
+		previous.Values = types.MapValueMust(types.StringType, owned)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &previous)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if valuesChanged || len(pending) > 0 {
+		if err := r.syncValues(ctx, data, previous); err != nil {
+			resp.Diagnostics.AddError("Unable to update application values", err.Error())
+			return
+		}
+	}
+	// Sending the slug pins it, so a rename preserves Terraform's address.
 	body := map[string]any{"name": data.Name.ValueString(), "slug": previous.Slug.ValueString()}
-	if source.Type == "git" {
+	if branchChanged {
 		body["branch"] = source.Branch
 	}
-	if autoDeploy != nil {
+	if autoDeploy != nil && (oldAutoDeploy == nil || *autoDeploy != *oldAutoDeploy) {
 		body["autoDeploy"] = *autoDeploy
 	}
 	if !data.CPUScale.Equal(previous.CPUScale) || !data.MemoryScale.Equal(previous.MemoryScale) || !data.VolumeSizes.Equal(previous.VolumeSizes) {
 		body["scale"] = scale
 	}
+	// Carry observed outputs into a values-only update that needs no PATCH.
+	data.ID, data.Slug, data.Status, data.Endpoints = previous.ID, previous.Slug, previous.Status, previous.Endpoints
+	data.EffectiveVolumeSizes = previous.EffectiveVolumeSizes
 	var result appEnvelope
-	if err := r.client.Do(ctx, http.MethodPatch, previous.apiPath(""), body, &result); err != nil {
-		resp.Diagnostics.AddError("Unable to update application", err.Error())
+	if !data.Name.Equal(previous.Name) || len(body) > 2 {
+		if err := r.client.Do(ctx, http.MethodPatch, previous.apiPath(""), body, &result); err != nil {
+			resp.Diagnostics.AddError("Unable to update application", err.Error())
+			return
+		}
+		resp.Diagnostics.Append(data.refresh(ctx, result.App)...)
+	}
+	// A branch PATCH already deploys using the values synchronized above.
+	if deploy && !branchChanged {
+		if err := r.client.Do(ctx, http.MethodPost, data.apiPath("/redeploy"), nil, &result); err != nil {
+			resp.Diagnostics.AddError("Application values saved but deployment failed", err.Error())
+			return
+		}
+		resp.Diagnostics.Append(data.refresh(ctx, result.App)...)
+	}
+	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(data.refresh(ctx, result.App)...)
+	resp.Diagnostics.Append(resp.Private.SetKey(ctx, "deployment_pending", nil)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -389,6 +443,9 @@ func (data *appResourceModel) refresh(ctx context.Context, app appWire) diag.Dia
 		}
 	}
 	data.VolumeSizes = types.MapValueMust(types.Int64Type, volumes)
+	capacities, capacityDiags := types.MapValueFrom(ctx, types.Int64Type, app.Scale.Volumes)
+	diags.Append(capacityDiags...)
+	data.EffectiveVolumeSizes = capacities
 	urls := make([]string, 0, len(app.Endpoints))
 	for _, endpoint := range app.Endpoints {
 		urls = append(urls, endpoint.URL)

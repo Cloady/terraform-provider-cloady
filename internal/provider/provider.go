@@ -35,7 +35,7 @@ func (p *cloadyProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 	resp.Schema = schema.Schema{Description: "Manage Cloady workspaces, applications, environment variables, and custom domains.", Attributes: map[string]schema.Attribute{
 		"token":           schema.StringAttribute{Optional: true, Sensitive: true, Description: "Personal API token. Defaults to CLOADY_TOKEN. Workspace creation requires full scope."},
 		"base_url":        schema.StringAttribute{Optional: true, Description: "Control-plane URL. Defaults to CLOADY_CONTROL_PLANE_URL, then https://cloady.com. Supply the origin without /api."},
-		"request_timeout": schema.Int64Attribute{Optional: true, Description: "Per-request timeout in seconds. Defaults to 180.", Validators: []validator.Int64{int64validator.Between(1, 1800)}},
+		"request_timeout": schema.Int64Attribute{Optional: true, Description: "Positive per-request timeout in seconds. Defaults to 180.", Validators: []validator.Int64{int64validator.Between(1, int64((1<<63-1)/time.Second))}},
 	}}
 }
 func (p *cloadyProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {

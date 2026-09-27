@@ -8,6 +8,6 @@ terraform {
 }
 
 # The token defaults to CLOADY_TOKEN. Mint one in the dashboard under
-# Account -> Tokens. Creating workspaces or changing billing needs full scope;
-# everything else works with a read token.
+# Account -> Tokens. Workspace administration needs full scope; app, variable,
+# and domain writes need deploy or full scope. Read scope supports other lookups.
 provider "cloady" {}

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -44,7 +43,7 @@ func TestAccWorkspace(t *testing.T) {
 	}
 	mock := newMockAPI(t)
 	defer mock.server.Close()
-	config := func(name, tier string) string {
+	config := func(name string) string {
 		return fmt.Sprintf(`
 provider "cloady" {
   token    = "test-token"
@@ -53,14 +52,13 @@ provider "cloady" {
 resource "cloady_workspace" "test" {
   slug = "demo"
   name = %q
-  tier = %q
 }
 data "cloady_workspace" "test" {
   slug = cloady_workspace.test.slug
 }
 
 data "cloady_regions" "test" {}
-`, mock.server.URL, name, tier)
+`, mock.server.URL, name)
 	}
 	resource.Test(t, resource.TestCase{ProtoV6ProviderFactories: testFactories, CheckDestroy: func(*terraform.State) error {
 		mock.mu.Lock()
@@ -70,31 +68,12 @@ data "cloady_regions" "test" {}
 		}
 		return nil
 	}, Steps: []resource.TestStep{
-		{Config: config("Demo", "free"), Check: resource.ComposeAggregateTestCheckFunc(resource.TestCheckResourceAttr("cloady_workspace.test", "id", "demo"), resource.TestCheckResourceAttr("cloady_workspace.test", "hues.0", "6"), resource.TestCheckResourceAttr("cloady_workspace.test", "hues.1", "211"), resource.TestCheckResourceAttr("data.cloady_workspace.test", "name", "Demo"), resource.TestCheckResourceAttr("data.cloady_regions.test", "regions.0.id", "eu1"))},
+		{Config: config("Demo"), Check: resource.ComposeAggregateTestCheckFunc(resource.TestCheckResourceAttr("cloady_workspace.test", "id", "demo"), resource.TestCheckResourceAttr("cloady_workspace.test", "hues.0", "6"), resource.TestCheckResourceAttr("cloady_workspace.test", "hues.1", "211"), resource.TestCheckResourceAttr("data.cloady_workspace.test", "name", "Demo"), resource.TestCheckResourceAttr("data.cloady_regions.test", "regions.0.id", "eu1"))},
 		{ResourceName: "cloady_workspace.test", ImportState: true, ImportStateVerify: true},
-		{Config: config("Renamed", "pro"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "tier", "pro")},
-		{PreConfig: func() { mock.mu.Lock(); mock.workspace["name"] = "Drift"; mock.mu.Unlock() }, Config: config("Renamed", "pro"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "name", "Renamed")},
-		{PreConfig: func() { mock.mu.Lock(); mock.workspace = nil; mock.mu.Unlock() }, Config: config("Renamed", "pro"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "id", "demo")},
+		{Config: config("Renamed"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "name", "Renamed")},
+		{PreConfig: func() { mock.mu.Lock(); mock.workspace["name"] = "Drift"; mock.mu.Unlock() }, Config: config("Renamed"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "name", "Renamed")},
+		{PreConfig: func() { mock.mu.Lock(); mock.workspace = nil; mock.mu.Unlock() }, Config: config("Renamed"), Check: resource.TestCheckResourceAttr("cloady_workspace.test", "id", "demo")},
 	}})
-}
-
-func TestAccWorkspacePendingBilling(t *testing.T) {
-	if os.Getenv("TF_ACC") != "1" {
-		t.Skip("set TF_ACC=1")
-	}
-	mock := newMockAPI(t)
-	defer mock.server.Close()
-	mock.pendingBilling = true
-	resource.Test(t, resource.TestCase{ProtoV6ProviderFactories: testFactories, Steps: []resource.TestStep{{Config: fmt.Sprintf(`
-provider "cloady" {
-  token    = "test-token"
-  base_url = %q
-}
-resource "cloady_workspace" "test" {
-  slug = "demo"
-  name = "Demo"
-  tier = "pro"
-}`, mock.server.URL), ExpectError: regexp.MustCompile("Workspace billing needs attention")}}})
 }
 
 // TestAccApp drives the app resource over the real Terraform protocol. Step two
@@ -116,7 +95,6 @@ provider "cloady" {
 resource "cloady_workspace" "test" {
   slug = "demo"
   name = "Demo"
-  tier = "free"
 }
 resource "cloady_app" "api" {
   workspace = cloady_workspace.test.slug
@@ -157,13 +135,17 @@ resource "cloady_app" "api" {
 }
 
 type mockAPI struct {
-	mu             sync.Mutex
-	server         *httptest.Server
-	workspace      map[string]any
-	app            map[string]any
-	variable       map[string]any
-	domain         map[string]any
-	pendingBilling bool
+	mu               sync.Mutex
+	server           *httptest.Server
+	workspace        map[string]any
+	app              map[string]any
+	variable         map[string]any
+	domain           map[string]any
+	appValues        map[string]variableRow
+	deployments      []map[string]string
+	failDeleteKey    string
+	failRedeploy     bool
+	redeployAttempts int
 }
 
 func newMockAPI(t *testing.T) *mockAPI {
@@ -195,20 +177,17 @@ func newMockAPI(t *testing.T) *mockAPI {
 		}
 		switch r.URL.Path {
 		case "/api/regions":
-			write(map[string]any{"regions": []any{map[string]any{"id": "eu1", "code": "eu1", "city": "Frankfurt", "country": "DE", "status": "available", "freeEligible": true, "ipv4": "192.0.2.1", "ipv6": nil}}})
+			write(map[string]any{"regions": []any{map[string]any{"id": "eu1", "code": "eu1", "country": "DE", "status": "available", "freeEligible": true, "ipv4": "192.0.2.1", "ipv6": nil}}})
 		case "/api/workspaces":
 			if r.Method != "POST" {
 				t.Errorf("unexpected %s", r.Method)
 				w.WriteHeader(405)
 				return
 			}
-			m.workspace = map[string]any{"slug": body["slug"], "name": body["name"], "hues": body["hues"], "plan": body["tier"], "services": []any{}}
-			if m.pendingBilling {
-				m.workspace["plan"] = nil
-				w.WriteHeader(202)
-				write(map[string]any{"workspace": m.workspace, "needsPayment": true, "checkoutUrl": "https://checkout.example.com"})
-				return
+			if _, sent := body["tier"]; sent {
+				t.Error("workspace create must not send a billing tier")
 			}
+			m.workspace = map[string]any{"slug": body["slug"], "name": body["name"], "hues": body["hues"], "services": []any{}}
 			w.WriteHeader(201)
 			write(map[string]any{"workspace": m.workspace})
 		case "/api/workspaces/demo":
@@ -238,9 +217,6 @@ func newMockAPI(t *testing.T) *mockAPI {
 				t.Errorf("unexpected method %s", r.Method)
 				w.WriteHeader(405)
 			}
-		case "/api/workspaces/demo/billing/plan":
-			m.workspace["plan"] = body["tier"]
-			write(map[string]bool{"ok": true})
 		default:
 			if strings.HasPrefix(r.URL.Path, "/api/workspaces/demo/apps/") || r.URL.Path == "/api/workspaces/demo/deploy" {
 				m.handleApp(t, w, r, body)
@@ -277,6 +253,13 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 				source["autoDeploy"] = autoDeploy
 			}
 		}
+		m.appValues = map[string]variableRow{}
+		if values, ok := body["values"].(map[string]any); ok {
+			for key, value := range values {
+				m.appValues[key] = variableRow{ID: key, Key: key, Value: value.(string), IsSecret: strings.Contains(key, "SECRET")}
+			}
+		}
+		m.recordDeployment()
 		m.app = map[string]any{
 			"slug": "api", "env": body["env"], "name": body["name"], "region": body["region"],
 			"status": "deploying", "source": source, "scale": body["scale"],
@@ -292,12 +275,31 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 		write(map[string]any{"error": map[string]string{"code": "not_found", "message": "not found"}})
 		return
 	}
+	if strings.Contains(r.URL.Path, "/vars") {
+		m.handleAppValues(t, w, r, body)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/redeploy") {
+		m.redeployAttempts++
+		if m.failRedeploy {
+			m.failRedeploy = false
+			w.WriteHeader(502)
+			write(map[string]string{"error": "deployment unavailable"})
+			return
+		}
+		m.recordDeployment()
+		write(map[string]any{"app": m.app})
+		return
+	}
 	switch r.Method {
 	case http.MethodPatch:
 		// One request must carry every field: the API used to drop autoDeploy
 		// whenever a branch change rode along with it.
 		source, _ := m.app["source"].(map[string]any)
 		if branch, ok := body["branch"]; ok && source != nil {
+			if source["branch"] != branch {
+				m.recordDeployment()
+			}
 			source["branch"] = branch
 		}
 		if autoDeploy, ok := body["autoDeploy"]; ok && source != nil {
@@ -315,6 +317,77 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 		write(map[string]bool{"ok": true})
 	default:
 		t.Errorf("unexpected method %s on %s", r.Method, r.URL.Path)
+		w.WriteHeader(405)
+	}
+}
+
+func (m *mockAPI) recordDeployment() {
+	values := map[string]string{}
+	for key, row := range m.appValues {
+		values[key] = row.Value
+	}
+	m.deployments = append(m.deployments, values)
+}
+
+func (m *mockAPI) handleAppValues(t *testing.T, w http.ResponseWriter, r *http.Request, body map[string]any) {
+	t.Helper()
+	write := func(value any) {
+		if err := json.NewEncoder(w).Encode(value); err != nil {
+			t.Error(err)
+		}
+	}
+	path := strings.SplitN(r.URL.Path, "/vars", 2)[1]
+	if path == "" {
+		if r.Method == http.MethodGet {
+			rows := []variableRow{}
+			for _, row := range m.appValues {
+				if row.IsSecret {
+					row.Value = "•••••"
+				}
+				rows = append(rows, row)
+			}
+			write(map[string]any{"vars": rows})
+			return
+		}
+		key := body["key"].(string)
+		if _, exists := m.appValues[key]; exists {
+			w.WriteHeader(409)
+			write(map[string]string{"error": "key taken"})
+			return
+		}
+		secret, _ := body["isSecret"].(bool)
+		m.appValues[key] = variableRow{ID: key, Key: key, Value: body["value"].(string), IsSecret: secret}
+		write(map[string]any{"var": m.appValues[key]})
+		return
+	}
+	key := strings.Split(strings.TrimPrefix(path, "/"), "/")[0]
+	row, exists := m.appValues[key]
+	if !exists {
+		w.WriteHeader(404)
+		write(map[string]string{"error": "not found"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if !strings.HasSuffix(path, "/reveal") {
+			t.Errorf("unexpected GET %s", path)
+		}
+		write(map[string]string{"value": row.Value})
+	case http.MethodPatch:
+		row.Value = body["value"].(string)
+		m.appValues[key] = row
+		write(map[string]any{"var": row})
+	case http.MethodDelete:
+		if key == m.failDeleteKey {
+			m.failDeleteKey = ""
+			w.WriteHeader(500)
+			write(map[string]string{"error": "variable delete unavailable"})
+			return
+		}
+		delete(m.appValues, key)
+		write(map[string]bool{"ok": true})
+	default:
+		t.Errorf("unexpected %s %s", r.Method, path)
 		w.WriteHeader(405)
 	}
 }

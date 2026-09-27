@@ -3,12 +3,12 @@
 page_title: "cloady_workspace Resource - cloady"
 subcategory: ""
 description: |-
-  A Cloady workspace and its billing tier. Deletion removes its applications and data. Configure payment in the dashboard before creating a paid workspace.
+  A Cloady workspace. Creating one is free; what it pays follows what its applications declare, and nothing is charged while they fit the free allowance. Deletion removes its applications and data.
 ---
 
 # cloady_workspace (Resource)
 
-A Cloady workspace and its billing tier. Deletion removes its applications and data. Configure payment in the dashboard before creating a paid workspace.
+A Cloady workspace. Creating one is free; what it pays follows what its applications declare, and nothing is charged while they fit the free allowance. Deletion removes its applications and data.
 
 ## Example Usage
 
@@ -16,7 +16,6 @@ A Cloady workspace and its billing tier. Deletion removes its applications and d
 resource "cloady_workspace" "acme" {
   slug = "acme"
   name = "Acme"
-  tier = "free"
 }
 ```
 
@@ -27,7 +26,6 @@ resource "cloady_workspace" "acme" {
 
 - `name` (String) Display name (1–60 characters; no surrounding whitespace).
 - `slug` (String) Unique workspace slug. Changing it replaces the workspace.
-- `tier` (String) Billing tier ID, such as free. Changes update the existing subscription.
 
 ### Optional
 

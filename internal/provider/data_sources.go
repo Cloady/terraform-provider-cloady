@@ -21,7 +21,6 @@ func (d *workspaceDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 		"slug": schema.StringAttribute{Required: true, Description: "Workspace slug."},
 		"id":   schema.StringAttribute{Computed: true, Description: "Workspace slug."},
 		"name": schema.StringAttribute{Computed: true, Description: "Display name."},
-		"tier": schema.StringAttribute{Computed: true, Description: "Active billing tier ID, or null while billing is pending."},
 		"hues": schema.ListAttribute{Computed: true, ElementType: types.Int64Type, Description: "Workspace brand hue angles."},
 	}}
 }
@@ -54,7 +53,6 @@ type regionsDataSource struct{ client *client.Client }
 type regionModel struct {
 	ID           types.String `tfsdk:"id"`
 	Code         types.String `tfsdk:"code"`
-	City         types.String `tfsdk:"city"`
 	Country      types.String `tfsdk:"country"`
 	Status       types.String `tfsdk:"status"`
 	FreeEligible types.Bool   `tfsdk:"free_eligible"`
@@ -71,7 +69,6 @@ func (d *regionsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest
 		"regions": schema.ListNestedAttribute{Computed: true, Description: "Available region records.", NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 			"id":            schema.StringAttribute{Computed: true, Description: "Region ID to pass to app resources."},
 			"code":          schema.StringAttribute{Computed: true, Description: "Region code."},
-			"city":          schema.StringAttribute{Computed: true, Description: "City."},
 			"country":       schema.StringAttribute{Computed: true, Description: "Country."},
 			"status":        schema.StringAttribute{Computed: true, Description: "Region status."},
 			"free_eligible": schema.BoolAttribute{Computed: true, Description: "Whether the region supports the free tier."},
@@ -93,10 +90,10 @@ func (d *regionsDataSource) Configure(_ context.Context, req datasource.Configur
 func (d *regionsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var result struct {
 		Regions []struct {
-			ID, Code, City, Country, Status string
-			FreeEligible                    bool    `json:"freeEligible"`
-			IPv4                            *string `json:"ipv4"`
-			IPv6                            *string `json:"ipv6"`
+			ID, Code, Country, Status string
+			FreeEligible              bool    `json:"freeEligible"`
+			IPv4                      *string `json:"ipv4"`
+			IPv6                      *string `json:"ipv6"`
 		} `json:"regions"`
 	}
 	if err := d.client.Do(ctx, "GET", "/api/regions", nil, &result); err != nil {
@@ -105,7 +102,7 @@ func (d *regionsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, 
 	}
 	regions := make([]regionModel, 0, len(result.Regions))
 	for _, r := range result.Regions {
-		regions = append(regions, regionModel{ID: types.StringValue(r.ID), Code: types.StringValue(r.Code), City: types.StringValue(r.City), Country: types.StringValue(r.Country), Status: types.StringValue(r.Status), FreeEligible: types.BoolValue(r.FreeEligible), IPv4: types.StringPointerValue(r.IPv4), IPv6: types.StringPointerValue(r.IPv6)})
+		regions = append(regions, regionModel{ID: types.StringValue(r.ID), Code: types.StringValue(r.Code), Country: types.StringValue(r.Country), Status: types.StringValue(r.Status), FreeEligible: types.BoolValue(r.FreeEligible), IPv4: types.StringPointerValue(r.IPv4), IPv6: types.StringPointerValue(r.IPv6)})
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &struct {
 		Regions []regionModel `tfsdk:"regions"`
