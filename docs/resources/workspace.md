@@ -30,7 +30,6 @@ resource "cloady_workspace" "acme" {
 ### Optional
 
 - `hues` (List of Number) Two brand hue angles, from 0 to 359. Derived from the workspace name when omitted, matching the dashboard, and then held steady across renames.
-- `managed_backups` (Boolean) Managed backups add-on: daily snapshots and 7 restore points, billed at 20% of the workspace plan. Left unset, Terraform keeps whatever the dashboard has.
 
 ### Read-Only
 

@@ -14,7 +14,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -24,17 +23,15 @@ import (
 
 type workspaceResource struct{ client *client.Client }
 type workspaceModel struct {
-	ID             types.String `tfsdk:"id"`
-	Slug           types.String `tfsdk:"slug"`
-	Name           types.String `tfsdk:"name"`
-	Hues           types.List   `tfsdk:"hues"`
-	ManagedBackups types.Bool   `tfsdk:"managed_backups"`
+	ID   types.String `tfsdk:"id"`
+	Slug types.String `tfsdk:"slug"`
+	Name types.String `tfsdk:"name"`
+	Hues types.List   `tfsdk:"hues"`
 }
 type workspaceAPI struct {
-	Slug           string  `json:"slug"`
-	Name           string  `json:"name"`
-	Hues           []int64 `json:"hues"`
-	ManagedBackups bool    `json:"managedBackups"`
+	Slug string  `json:"slug"`
+	Name string  `json:"name"`
+	Hues []int64 `json:"hues"`
 }
 type workspaceResponse struct {
 	Workspace workspaceAPI `json:"workspace"`
@@ -59,11 +56,10 @@ func (r *workspaceResource) Metadata(_ context.Context, req resource.MetadataReq
 }
 func (r *workspaceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{Description: "A Cloady workspace. Creating one is free; what it pays follows what its applications declare, and nothing is charged while they fit the free allowance. Deletion removes its applications and data.", Attributes: map[string]schema.Attribute{
-		"id":              schema.StringAttribute{Computed: true, Description: "Workspace slug, used as the import ID.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-		"slug":            schema.StringAttribute{Required: true, Description: "Unique workspace slug. Changing it replaces the workspace.", Validators: []validator.String{stringvalidator.LengthBetween(1, 40), stringvalidator.RegexMatches(regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`), "must contain lowercase letters, digits and hyphens")}, PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
-		"name":            schema.StringAttribute{Required: true, Description: "Display name (1–60 characters; no surrounding whitespace).", Validators: []validator.String{stringvalidator.LengthBetween(1, 60), stringvalidator.RegexMatches(regexp.MustCompile(`^\S(?:[\s\S]*\S)?$`), "must not have surrounding whitespace")}},
-		"hues":            schema.ListAttribute{Optional: true, Computed: true, ElementType: types.Int64Type, Description: "Two brand hue angles, from 0 to 359. Derived from the workspace name when omitted, matching the dashboard, and then held steady across renames.", PlanModifiers: []planmodifier.List{listplanmodifier.UseStateForUnknown()}, Validators: []validator.List{listvalidator.SizeBetween(2, 2), listvalidator.ValueInt64sAre(int64validator.Between(0, 359))}},
-		"managed_backups": schema.BoolAttribute{Optional: true, Computed: true, Description: "Managed backups add-on: daily snapshots and 7 restore points, billed at 20% of the workspace plan. Left unset, Terraform keeps whatever the dashboard has.", PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()}},
+		"id":   schema.StringAttribute{Computed: true, Description: "Workspace slug, used as the import ID.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+		"slug": schema.StringAttribute{Required: true, Description: "Unique workspace slug. Changing it replaces the workspace.", Validators: []validator.String{stringvalidator.LengthBetween(1, 40), stringvalidator.RegexMatches(regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`), "must contain lowercase letters, digits and hyphens")}, PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
+		"name": schema.StringAttribute{Required: true, Description: "Display name (1–60 characters; no surrounding whitespace).", Validators: []validator.String{stringvalidator.LengthBetween(1, 60), stringvalidator.RegexMatches(regexp.MustCompile(`^\S(?:[\s\S]*\S)?$`), "must not have surrounding whitespace")}},
+		"hues": schema.ListAttribute{Optional: true, Computed: true, ElementType: types.Int64Type, Description: "Two brand hue angles, from 0 to 359. Derived from the workspace name when omitted, matching the dashboard, and then held steady across renames.", PlanModifiers: []planmodifier.List{listplanmodifier.UseStateForUnknown()}, Validators: []validator.List{listvalidator.SizeBetween(2, 2), listvalidator.ValueInt64sAre(int64validator.Between(0, 359))}},
 	}}
 }
 func (r *workspaceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -81,7 +77,6 @@ func (m *workspaceModel) setAPI(ctx context.Context, w workspaceAPI) {
 	m.Slug = types.StringValue(w.Slug)
 	m.Name = types.StringValue(w.Name)
 	m.Hues, _ = types.ListValueFrom(ctx, types.Int64Type, w.Hues)
-	m.ManagedBackups = types.BoolValue(w.ManagedBackups)
 }
 func resolveHues(ctx context.Context, data workspaceModel) ([]int64, diag.Diagnostics) {
 	if data.Hues.IsNull() || data.Hues.IsUnknown() {
@@ -108,17 +103,8 @@ func (r *workspaceResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("Unable to create workspace", err.Error())
 		return
 	}
-	wantBackups := data.ManagedBackups
 	data.setAPI(ctx, result.Workspace)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-	if !wantBackups.IsNull() && !wantBackups.IsUnknown() && wantBackups.ValueBool() != result.Workspace.ManagedBackups {
-		if err := r.client.Do(ctx, "PATCH", client.WorkspacePath(result.Workspace.Slug), map[string]any{"managedBackups": wantBackups.ValueBool()}, &result); err != nil {
-			resp.Diagnostics.AddError("Unable to set managed backups", err.Error())
-			return
-		}
-		data.setAPI(ctx, result.Workspace)
-		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-	}
 	if result.Workspace.Slug != wantedSlug {
 		resp.Diagnostics.AddError("Workspace slug was already taken", fmt.Sprintf("Cloady created %q instead of %q. Its actual ID has been saved in state. Update the configuration to that slug or remove the new workspace before retrying.", result.Workspace.Slug, wantedSlug))
 	}
@@ -155,9 +141,6 @@ func (r *workspaceResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 	body := map[string]any{"name": data.Name.ValueString(), "slug": data.Slug.ValueString(), "hues": hues}
-	if !data.ManagedBackups.IsNull() && !data.ManagedBackups.IsUnknown() {
-		body["managedBackups"] = data.ManagedBackups.ValueBool()
-	}
 	var result workspaceResponse
 	err := r.client.Do(ctx, "PATCH", client.WorkspacePath(old.ID.ValueString()), body, &result)
 	if err != nil {
