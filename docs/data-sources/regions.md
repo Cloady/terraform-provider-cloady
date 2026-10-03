@@ -34,7 +34,6 @@ Read-Only:
 
 - `code` (String) Region code.
 - `country` (String) Country.
-- `free_eligible` (Boolean) Whether the region supports the free tier.
 - `id` (String) Region ID to pass to app resources.
 - `ipv4` (String) Public IPv4 address, when available.
 - `ipv6` (String) Public IPv6 address, when available.

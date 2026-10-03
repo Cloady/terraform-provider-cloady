@@ -177,7 +177,7 @@ func newMockAPI(t *testing.T) *mockAPI {
 		}
 		switch r.URL.Path {
 		case "/api/regions":
-			write(map[string]any{"regions": []any{map[string]any{"id": "eu1", "code": "eu1", "country": "DE", "status": "available", "freeEligible": true, "ipv4": "192.0.2.1", "ipv6": nil}}})
+			write(map[string]any{"regions": []any{map[string]any{"id": "eu1", "code": "eu1", "country": "DE", "status": "available", "ipv4": "192.0.2.1", "ipv6": nil}}})
 		case "/api/workspaces":
 			if r.Method != "POST" {
 				t.Errorf("unexpected %s", r.Method)
