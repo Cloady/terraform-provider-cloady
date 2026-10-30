@@ -77,16 +77,17 @@ data "cloady_regions" "test" {}
 }
 
 // TestAccApp drives the app resource over the real Terraform protocol. Step two
-// changes the branch and auto_deploy together in a single apply: the control
+// changes the branch and auto_update together in a single apply: the control
 // plane used to overwrite the whole source object on a branch change and drop
-// autoDeploy with it, which is why the provider once sent two PATCH requests.
+// the switch with it, which is why the provider once sent two PATCH requests.
+// It also turns managed backups on with a window, which is a separate request.
 func TestAccApp(t *testing.T) {
 	if os.Getenv("TF_ACC") != "1" {
 		t.Skip("set TF_ACC=1 and install Terraform to run protocol tests")
 	}
 	mock := newMockAPI(t)
 	defer mock.server.Close()
-	config := func(branch string, autoDeploy bool) string {
+	config := func(branch string, autoUpdate bool, backups string) string {
 		return fmt.Sprintf(`
 provider "cloady" {
   token    = "test-token"
@@ -97,16 +98,17 @@ resource "cloady_workspace" "test" {
   name = "Demo"
 }
 resource "cloady_app" "api" {
-  workspace = cloady_workspace.test.slug
-  name      = "API"
-  region    = "eu1"
+  workspace   = cloady_workspace.test.slug
+  name        = "API"
+  region      = "eu1"
+  auto_update = %t
+  %s
   git = {
     repository_url = "https://github.com/acme/api"
     branch         = %q
-    auto_deploy    = %t
   }
 }
-`, mock.server.URL, branch, autoDeploy)
+`, mock.server.URL, autoUpdate, backups, branch)
 	}
 	resource.Test(t, resource.TestCase{ProtoV6ProviderFactories: testFactories, CheckDestroy: func(*terraform.State) error {
 		mock.mu.Lock()
@@ -116,19 +118,24 @@ resource "cloady_app" "api" {
 		}
 		return nil
 	}, Steps: []resource.TestStep{
-		{Config: config("main", true), Check: resource.ComposeAggregateTestCheckFunc(
+		{Config: config("main", true, ""), Check: resource.ComposeAggregateTestCheckFunc(
 			resource.TestCheckResourceAttr("cloady_app.api", "id", "demo/api/production/eu1"),
 			resource.TestCheckResourceAttr("cloady_app.api", "slug", "api"),
 			resource.TestCheckResourceAttr("cloady_app.api", "git.branch", "main"),
-			resource.TestCheckResourceAttr("cloady_app.api", "git.auto_deploy", "true"),
+			resource.TestCheckResourceAttr("cloady_app.api", "auto_update", "true"),
+			resource.TestCheckResourceAttr("cloady_app.api", "managed_backups", "false"),
+			resource.TestCheckResourceAttr("cloady_app.api", "backup_window", "auto"),
+			resource.TestCheckResourceAttr("cloady_app.api", "type", "shared"),
 			resource.TestCheckResourceAttr("cloady_app.api", "cpu_scale", "1"),
 			// The create response carries the public URL, so endpoints[0] is
 			// usable in an output on the very first apply.
 			resource.TestCheckResourceAttr("cloady_app.api", "endpoints.0", "https://api-demo.cloady.io"),
 		)},
-		{Config: config("release", false), Check: resource.ComposeAggregateTestCheckFunc(
+		{Config: config("release", false, "managed_backups = true\n  backup_window   = \"04\""), Check: resource.ComposeAggregateTestCheckFunc(
 			resource.TestCheckResourceAttr("cloady_app.api", "git.branch", "release"),
-			resource.TestCheckResourceAttr("cloady_app.api", "git.auto_deploy", "false"),
+			resource.TestCheckResourceAttr("cloady_app.api", "auto_update", "false"),
+			resource.TestCheckResourceAttr("cloady_app.api", "managed_backups", "true"),
+			resource.TestCheckResourceAttr("cloady_app.api", "backup_window", "04"),
 		)},
 		{ResourceName: "cloady_app.api", ImportState: true, ImportStateId: "demo/api/production/eu1", ImportStateVerify: true},
 	}})
@@ -141,6 +148,7 @@ type mockAPI struct {
 	app              map[string]any
 	variable         map[string]any
 	domain           map[string]any
+	backups          map[string]any
 	appValues        map[string]variableRow
 	deployments      []map[string]string
 	failDeleteKey    string
@@ -245,14 +253,11 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 			return
 		}
 		source, _ := body["source"].(map[string]any)
-		if source["type"] == "git" {
-			if _, ok := source["autoDeploy"]; ok {
-				t.Error("autoDeploy belongs at the top level of the deploy body, not inside source")
-			}
-			if autoDeploy, ok := body["autoDeploy"].(bool); ok {
-				source["autoDeploy"] = autoDeploy
-			}
+		if _, ok := body["autoDeploy"]; ok {
+			t.Error("the deploy body carries autoUpdate on the source, not autoDeploy")
 		}
+		enabled, _ := body["backups"].(bool)
+		m.backups = map[string]any{"enabled": enabled, "window": "auto"}
 		m.appValues = map[string]variableRow{}
 		if values, ok := body["values"].(map[string]any); ok {
 			for key, value := range values {
@@ -262,7 +267,7 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 		m.recordDeployment()
 		m.app = map[string]any{
 			"slug": "api", "env": body["env"], "name": body["name"], "region": body["region"],
-			"status": "deploying", "source": source, "scale": body["scale"],
+			"status": "deploying", "type": "shared", "source": source, "scale": body["scale"],
 			"endpoints":   []any{map[string]any{"component": "web", "url": "https://api-demo.cloady.io"}},
 			"subServices": []any{}, "uptime": "", "limits": map[string]any{},
 		}
@@ -279,6 +284,15 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 		m.handleAppValues(t, w, r, body)
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/backups") {
+		if r.Method == http.MethodPatch {
+			for key, value := range body {
+				m.backups[key] = value
+			}
+		}
+		write(m.backups)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/redeploy") {
 		m.redeployAttempts++
 		if m.failRedeploy {
@@ -293,8 +307,8 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		// One request must carry every field: the API used to drop autoDeploy
-		// whenever a branch change rode along with it.
+		// One request must carry every field: the API used to drop the auto
+		// update switch whenever a branch change rode along with it.
 		source, _ := m.app["source"].(map[string]any)
 		if branch, ok := body["branch"]; ok && source != nil {
 			if source["branch"] != branch {
@@ -302,8 +316,8 @@ func (m *mockAPI) handleApp(t *testing.T, w http.ResponseWriter, r *http.Request
 			}
 			source["branch"] = branch
 		}
-		if autoDeploy, ok := body["autoDeploy"]; ok && source != nil {
-			source["autoDeploy"] = autoDeploy
+		if autoUpdate, ok := body["autoUpdate"]; ok && source != nil {
+			source["autoUpdate"] = autoUpdate
 		}
 		for _, key := range []string{"name", "slug", "scale"} {
 			if value, ok := body[key]; ok {

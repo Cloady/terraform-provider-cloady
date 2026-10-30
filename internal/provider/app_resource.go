@@ -14,10 +14,11 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/float64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -35,7 +36,6 @@ var (
 		"repository_url": types.StringType,
 		"branch":         types.StringType,
 		"subdirectory":   types.StringType,
-		"auto_deploy":    types.BoolType,
 	}
 )
 
@@ -50,6 +50,11 @@ type appResourceModel struct {
 	Region               types.String  `tfsdk:"region"`
 	Git                  types.Object  `tfsdk:"git"`
 	Catalog              types.String  `tfsdk:"catalog"`
+	Profiles             types.Set     `tfsdk:"profiles"`
+	AutoUpdate           types.Bool    `tfsdk:"auto_update"`
+	ManagedBackups       types.Bool    `tfsdk:"managed_backups"`
+	BackupWindow         types.String  `tfsdk:"backup_window"`
+	Type                 types.String  `tfsdk:"type"`
 	CPUScale             types.Float64 `tfsdk:"cpu_scale"`
 	MemoryScale          types.Float64 `tfsdk:"memory_scale"`
 	VolumeSizes          types.Map     `tfsdk:"volume_sizes"`
@@ -63,7 +68,6 @@ type appGitModel struct {
 	RepositoryURL types.String `tfsdk:"repository_url"`
 	Branch        types.String `tfsdk:"branch"`
 	Subdirectory  types.String `tfsdk:"subdirectory"`
-	AutoDeploy    types.Bool   `tfsdk:"auto_deploy"`
 }
 
 // These small wire types intentionally cover only the app fields Terraform owns.
@@ -73,6 +77,7 @@ type appWire struct {
 	Name      string         `json:"name"`
 	Region    string         `json:"region"`
 	Status    string         `json:"status"`
+	Type      string         `json:"type"`
 	Source    *appSourceWire `json:"source"`
 	Scale     appScaleWire   `json:"scale"`
 	Endpoints []struct {
@@ -81,12 +86,18 @@ type appWire struct {
 }
 
 type appSourceWire struct {
-	Type          string `json:"type"`
-	RepositoryURL string `json:"repoUrl,omitempty"`
-	Name          string `json:"name,omitempty"`
-	Branch        string `json:"branch,omitempty"`
-	Subdirectory  string `json:"subdir,omitempty"`
-	AutoDeploy    *bool  `json:"autoDeploy,omitempty"`
+	Type          string   `json:"type"`
+	RepositoryURL string   `json:"repoUrl,omitempty"`
+	Name          string   `json:"name,omitempty"`
+	Branch        string   `json:"branch,omitempty"`
+	Subdirectory  string   `json:"subdir,omitempty"`
+	AutoUpdate    *bool    `json:"autoUpdate,omitempty"`
+	Profiles      []string `json:"profiles,omitempty"`
+}
+
+type appBackupsWire struct {
+	Enabled bool   `json:"enabled"`
+	Window  string `json:"window"`
 }
 
 type appScaleWire struct {
@@ -121,8 +132,12 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				"repository_url": schema.StringAttribute{Required: true, Description: "Repository URL, including its scheme, or git@ SSH address.", PlanModifiers: replace},
 				"branch":         schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("main"), Description: "Git branch to deploy. Defaults to main, matching Cloady deployment behavior.", Validators: []validator.String{stringvalidator.LengthAtLeast(1)}},
 				"subdirectory":   schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""), Description: "Repository subdirectory without leading or trailing slashes.", PlanModifiers: replace},
-				"auto_deploy":    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true), Description: "Automatically deploy Git updates. Defaults to true; set false for manual deployments."},
 			}},
+			"profiles":               schema.SetAttribute{Optional: true, Computed: true, ElementType: types.StringType, PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown(), setplanmodifier.RequiresReplace()}, Description: "Compose profiles to run, for templates that offer variants such as a choice of desktop. Defaults to the template's own choice. Changing it replaces the application."},
+			"auto_update":            schema.BoolAttribute{Optional: true, Computed: true, PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()}, Description: "Keep the application current with its source. A Git application deploys every push to its branch; a catalog application installs new versions of its template, checked hourly, skipping any update that would change its price. Defaults to true for Git applications outside development and false for catalog applications."},
+			"managed_backups":        schema.BoolAttribute{Optional: true, Computed: true, PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()}, Description: "Daily snapshots of the application's volumes, keeping the last seven, billed at 20% of the application's own price. Defaults to false."},
+			"backup_window":          schema.StringAttribute{Optional: true, Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}, Validators: []validator.String{stringvalidator.OneOf("auto", "00", "04", "08", "12", "16", "20")}, Description: "UTC hour the daily managed backup starts: 00, 04, 08, 12, 16 or 20, or auto for between 01:00 and 05:00 UTC. Defaults to auto."},
+			"type":                   schema.StringAttribute{Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}, Description: "shared, or dedicated when the template asks for a server of its own, which gives its tcp and udp ports the server's IPv4 address. A dedicated application is never free."},
 			"cpu_scale":              schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(1), Description: "CPU multiplier, from 0.5 through 4 in increments of 0.25. This is not a core count."},
 			"memory_scale":           schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(1), Description: "Memory multiplier, from 0.5 through 4 in increments of 0.25. This is not a GiB amount."},
 			"volume_sizes":           schema.MapAttribute{Optional: true, Computed: true, ElementType: types.Int64Type, Default: mapdefault.StaticValue(types.MapValueMust(types.Int64Type, map[string]attr.Value{})), Description: "Explicit volume size overrides in GiB, keyed by template volume name (1–4096 GiB). In-place updates cannot shrink existing volumes. Unspecified volumes retain their server-managed size."},
@@ -215,7 +230,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	requestedSlug := data.Slug.ValueString()
-	source, autoDeploy, diags := data.source(ctx)
+	source, diags := data.source(ctx)
 	resp.Diagnostics.Append(diags...)
 	scale, diags := data.scale(ctx)
 	resp.Diagnostics.Append(diags...)
@@ -228,8 +243,8 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	body := map[string]any{"values": values, "name": data.Name.ValueString(), "region": data.Region.ValueString(), "env": data.Environment.ValueString(), "source": source, "scale": scale}
-	if autoDeploy != nil {
-		body["autoDeploy"] = *autoDeploy
+	if !data.ManagedBackups.IsNull() && !data.ManagedBackups.IsUnknown() {
+		body["backups"] = data.ManagedBackups.ValueBool()
 	}
 	var result appEnvelope
 	if err := r.client.Do(ctx, http.MethodPost, client.WorkspacePath(data.Workspace.ValueString())+"/deploy", body, &result); err != nil {
@@ -237,6 +252,7 @@ func (r *appResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 	resp.Diagnostics.Append(data.refresh(ctx, result.App)...)
+	resp.Diagnostics.Append(r.backups(ctx, &data, backupChanges(data, nil))...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -277,6 +293,7 @@ func (r *appResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		if app.Slug == data.Slug.ValueString() && app.Env == data.Environment.ValueString() && app.Region == data.Region.ValueString() {
 			resp.Diagnostics.Append(data.refresh(ctx, app)...)
 			resp.Diagnostics.Append(r.readValues(ctx, &data)...)
+			resp.Diagnostics.Append(r.backups(ctx, &data, nil)...)
 			if resp.Diagnostics.HasError() {
 				return
 			}
@@ -307,14 +324,14 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	source, autoDeploy, diags := data.source(ctx)
+	source, diags := data.source(ctx)
 	resp.Diagnostics.Append(diags...)
 	scale, diags := data.scale(ctx)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	oldSource, oldAutoDeploy, diags := previous.source(ctx)
+	oldSource, diags := previous.source(ctx)
 	resp.Diagnostics.Append(diags...)
 	pending, diags := req.Private.GetKey(ctx, "deployment_pending")
 	resp.Diagnostics.Append(diags...)
@@ -346,8 +363,8 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	if branchChanged {
 		body["branch"] = source.Branch
 	}
-	if autoDeploy != nil && (oldAutoDeploy == nil || *autoDeploy != *oldAutoDeploy) {
-		body["autoDeploy"] = *autoDeploy
+	if !data.AutoUpdate.IsNull() && !data.AutoUpdate.IsUnknown() && !data.AutoUpdate.Equal(previous.AutoUpdate) {
+		body["autoUpdate"] = data.AutoUpdate.ValueBool()
 	}
 	if !data.CPUScale.Equal(previous.CPUScale) || !data.MemoryScale.Equal(previous.MemoryScale) || !data.VolumeSizes.Equal(previous.VolumeSizes) {
 		body["scale"] = scale
@@ -355,6 +372,9 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	// Carry observed outputs into a values-only update that needs no PATCH.
 	data.ID, data.Slug, data.Status, data.Endpoints = previous.ID, previous.Slug, previous.Status, previous.Endpoints
 	data.EffectiveVolumeSizes = previous.EffectiveVolumeSizes
+	if data.AutoUpdate.IsUnknown() {
+		data.AutoUpdate = previous.AutoUpdate
+	}
 	var result appEnvelope
 	if !data.Name.Equal(previous.Name) || len(body) > 2 {
 		if err := r.client.Do(ctx, http.MethodPatch, previous.apiPath(""), body, &result); err != nil {
@@ -371,6 +391,7 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		}
 		resp.Diagnostics.Append(data.refresh(ctx, result.App)...)
 	}
+	resp.Diagnostics.Append(r.backups(ctx, &data, backupChanges(data, &previous))...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -404,14 +425,63 @@ func (data appResourceModel) apiPath(suffix string) string {
 	return client.AppPath(data.Workspace.ValueString(), data.Slug.ValueString(), data.Environment.ValueString(), data.Region.ValueString(), suffix)
 }
 
-func (data appResourceModel) source(ctx context.Context) (appSourceWire, *bool, diag.Diagnostics) {
+func (data appResourceModel) source(ctx context.Context) (appSourceWire, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	var autoUpdate *bool
+	if !data.AutoUpdate.IsNull() && !data.AutoUpdate.IsUnknown() {
+		value := data.AutoUpdate.ValueBool()
+		autoUpdate = &value
+	}
+	var profiles []string
+	if !data.Profiles.IsNull() && !data.Profiles.IsUnknown() {
+		diags.Append(data.Profiles.ElementsAs(ctx, &profiles, false)...)
+	}
 	if !data.Catalog.IsNull() {
-		return appSourceWire{Type: "catalog", Name: data.Catalog.ValueString()}, nil, nil
+		return appSourceWire{Type: "catalog", Name: data.Catalog.ValueString(), AutoUpdate: autoUpdate, Profiles: profiles}, diags
 	}
 	var git appGitModel
-	diags := data.Git.As(ctx, &git, basetypes.ObjectAsOptions{})
-	autoDeploy := git.AutoDeploy.ValueBool()
-	return appSourceWire{Type: "git", RepositoryURL: git.RepositoryURL.ValueString(), Branch: git.Branch.ValueString(), Subdirectory: git.Subdirectory.ValueString()}, &autoDeploy, diags
+	diags.Append(data.Git.As(ctx, &git, basetypes.ObjectAsOptions{})...)
+	return appSourceWire{Type: "git", RepositoryURL: git.RepositoryURL.ValueString(), Branch: git.Branch.ValueString(), Subdirectory: git.Subdirectory.ValueString(), AutoUpdate: autoUpdate, Profiles: profiles}, diags
+}
+
+// backupChanges lists the managed-backup settings the configuration sets and
+// state does not yet hold; without a previous state only the window is
+// missing, since the deploy request already carried the switch.
+func backupChanges(data appResourceModel, previous *appResourceModel) map[string]any {
+	changes := map[string]any{}
+	differs := func(planned attr.Value, prior attr.Value) bool {
+		return !planned.IsNull() && !planned.IsUnknown() && (prior == nil || !planned.Equal(prior))
+	}
+	if previous != nil && differs(data.ManagedBackups, previous.ManagedBackups) {
+		changes["enabled"] = data.ManagedBackups.ValueBool()
+	}
+	var priorWindow attr.Value
+	if previous != nil {
+		priorWindow = previous.BackupWindow
+	}
+	if differs(data.BackupWindow, priorWindow) {
+		changes["window"] = data.BackupWindow.ValueString()
+	}
+	return changes
+}
+
+// backups applies the given changes, or reads the settings when there are none.
+func (r *appResource) backups(ctx context.Context, data *appResourceModel, changes map[string]any) diag.Diagnostics {
+	var diags diag.Diagnostics
+	var result appBackupsWire
+	var err error
+	if len(changes) > 0 {
+		err = r.client.Do(ctx, http.MethodPatch, data.apiPath("/backups"), changes, &result)
+	} else {
+		err = r.client.Do(ctx, http.MethodGet, data.apiPath("/backups"), nil, &result)
+	}
+	if err != nil {
+		diags.AddError("Unable to update managed backups", err.Error())
+		return diags
+	}
+	data.ManagedBackups = types.BoolValue(result.Enabled)
+	data.BackupWindow = types.StringValue(result.Window)
+	return diags
 }
 
 func (data appResourceModel) scale(ctx context.Context) (appScaleWire, diag.Diagnostics) {
@@ -457,6 +527,27 @@ func (data *appResourceModel) refresh(ctx context.Context, app appWire) diag.Dia
 		diags.AddError("Unsupported application source", "This application has no Git or catalog source.")
 		return diags
 	}
+	autoUpdate := app.Source.Type == "git" && app.Env != "development"
+	if app.Source.AutoUpdate != nil {
+		autoUpdate = *app.Source.AutoUpdate
+	}
+	data.AutoUpdate = types.BoolValue(autoUpdate)
+	appType := app.Type
+	if appType == "" {
+		appType = "shared"
+	}
+	data.Type = types.StringValue(appType)
+	// Profiles are a create-time choice that the server may complete with a
+	// group's default, so only an unset value is filled in from the response.
+	if data.Profiles.IsNull() || data.Profiles.IsUnknown() {
+		profiles := types.SetNull(types.StringType)
+		if len(app.Source.Profiles) > 0 {
+			var profileDiags diag.Diagnostics
+			profiles, profileDiags = types.SetValueFrom(ctx, types.StringType, app.Source.Profiles)
+			diags.Append(profileDiags...)
+		}
+		data.Profiles = profiles
+	}
 	switch app.Source.Type {
 	case "catalog":
 		data.Catalog = types.StringValue(app.Source.Name)
@@ -466,11 +557,7 @@ func (data *appResourceModel) refresh(ctx context.Context, app appWire) diag.Dia
 		if branch == "" {
 			branch = "main"
 		}
-		autoDeploy := app.Env != "development"
-		if app.Source.AutoDeploy != nil {
-			autoDeploy = *app.Source.AutoDeploy
-		}
-		git := appGitModel{RepositoryURL: types.StringValue(app.Source.RepositoryURL), Branch: types.StringValue(branch), Subdirectory: types.StringValue(app.Source.Subdirectory), AutoDeploy: types.BoolValue(autoDeploy)}
+		git := appGitModel{RepositoryURL: types.StringValue(app.Source.RepositoryURL), Branch: types.StringValue(branch), Subdirectory: types.StringValue(app.Source.Subdirectory)}
 		value, valueDiags := types.ObjectValueFrom(ctx, appGitTypes, git)
 		diags.Append(valueDiags...)
 		data.Git = value

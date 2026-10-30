@@ -23,4 +23,10 @@ resource "cloady_app" "db" {
 
   # Existing volumes cannot shrink. Replacement apps create fresh storage.
   volume_sizes = { data = 20 }
+
+  # Install new versions of the template as they're released, and keep a
+  # week of daily snapshots taken at 04:00 UTC.
+  auto_update     = true
+  managed_backups = true
+  backup_window   = "04"
 }

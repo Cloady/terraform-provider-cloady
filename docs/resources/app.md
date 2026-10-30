@@ -38,6 +38,12 @@ resource "cloady_app" "db" {
 
   # Existing volumes cannot shrink. Replacement apps create fresh storage.
   volume_sizes = { data = 20 }
+
+  # Install new versions of the template as they're released, and keep a
+  # week of daily snapshots taken at 04:00 UTC.
+  auto_update     = true
+  managed_backups = true
+  backup_window   = "04"
 }
 ```
 
@@ -52,11 +58,15 @@ resource "cloady_app" "db" {
 
 ### Optional
 
+- `auto_update` (Boolean) Keep the application current with its source. A Git application deploys every push to its branch; a catalog application installs new versions of its template, checked hourly, skipping any update that would change its price. Defaults to true for Git applications outside development and false for catalog applications.
+- `backup_window` (String) UTC hour the daily managed backup starts: 00, 04, 08, 12, 16 or 20, or auto for between 01:00 and 05:00 UTC. Defaults to auto.
 - `catalog` (String) Catalog application name, such as postgres. Set exactly one of catalog or git.
 - `cpu_scale` (Number) CPU multiplier, from 0.5 through 4 in increments of 0.25. This is not a core count.
 - `environment` (String) Application environment: production, preview, or development.
 - `git` (Attributes) Git source. Set exactly one of git or catalog. (see [below for nested schema](#nestedatt--git))
+- `managed_backups` (Boolean) Daily snapshots of the application's volumes, keeping the last seven, billed at 20% of the application's own price. Defaults to false.
 - `memory_scale` (Number) Memory multiplier, from 0.5 through 4 in increments of 0.25. This is not a GiB amount.
+- `profiles` (Set of String) Compose profiles to run, for templates that offer variants such as a choice of desktop. Defaults to the template's own choice. Changing it replaces the application.
 - `slug` (String) Application slug. Generated from name when omitted. Changing a configured slug replaces the application.
 - `values` (Map of String, Sensitive) Environment values supplied before the first deployment. Changes synchronize these keys and start one deployment; other variables are preserved. Do not manage the same keys with cloady_variable. Plaintext values are stored in Terraform state.
 - `volume_sizes` (Map of Number) Explicit volume size overrides in GiB, keyed by template volume name (1–4096 GiB). In-place updates cannot shrink existing volumes. Unspecified volumes retain their server-managed size.
@@ -67,6 +77,7 @@ resource "cloady_app" "db" {
 - `endpoints` (List of String) Public endpoint URLs returned by Cloady.
 - `id` (String) Import identifier: workspace/app/environment/region.
 - `status` (String) Observed deployment state; successful apply does not imply readiness.
+- `type` (String) shared, or dedicated when the template asks for a server of its own, which gives its tcp and udp ports the server's IPv4 address. A dedicated application is never free.
 
 <a id="nestedatt--git"></a>
 ### Nested Schema for `git`
@@ -77,7 +88,6 @@ Required:
 
 Optional:
 
-- `auto_deploy` (Boolean) Automatically deploy Git updates. Defaults to true; set false for manual deployments.
 - `branch` (String) Git branch to deploy. Defaults to main, matching Cloady deployment behavior.
 - `subdirectory` (String) Repository subdirectory without leading or trailing slashes.
 

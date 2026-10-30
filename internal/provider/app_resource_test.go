@@ -22,7 +22,8 @@ func TestAppVolumeCapacity(t *testing.T) {
 	base := appResourceModel{
 		ID: types.StringValue("demo/db/production/eu1"), Workspace: types.StringValue("demo"),
 		Name: types.StringValue("DB"), Slug: types.StringValue("db"), Environment: types.StringValue("production"), Region: types.StringValue("eu1"),
-		Catalog: types.StringValue("postgres"), Git: types.ObjectNull(appGitTypes),
+		Catalog: types.StringValue("postgres"), Git: types.ObjectNull(appGitTypes), Profiles: types.SetNull(types.StringType),
+		AutoUpdate: types.BoolValue(false), ManagedBackups: types.BoolValue(false), BackupWindow: types.StringValue("auto"), Type: types.StringValue("shared"),
 		CPUScale: types.Float64Value(1), MemoryScale: types.Float64Value(1),
 		VolumeSizes:          types.MapValueMust(types.Int64Type, map[string]attr.Value{}),
 		EffectiveVolumeSizes: types.MapValueMust(types.Int64Type, map[string]attr.Value{"data": types.Int64Value(10)}),
@@ -47,7 +48,7 @@ func TestAppVolumeCapacity(t *testing.T) {
 			m.Catalog = types.StringNull()
 			m.Git = types.ObjectValueMust(appGitTypes, map[string]attr.Value{
 				"repository_url": types.StringValue("https://github.com/acme/api"), "branch": types.StringValue("main"),
-				"subdirectory": types.StringValue(""), "auto_deploy": types.BoolValue(true),
+				"subdirectory": types.StringValue(""),
 			})
 		}, false},
 	} {
